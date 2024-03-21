@@ -28,6 +28,34 @@ pip3 install packaging
 pip3 install -e '.[flash-attn]'
 ```
 
+## Changes to code:
+The relevant changes are adding the following to the modeling code:
+```python
+def activation_quant(x):
+    scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
+    y = (x * scale).round().clamp_(-128, 127) / scale
+    return y
+
+
+def weight_quant(w):
+    scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
+    u = (w * scale).round().clamp_(-1, 1) / scale
+    return u
+
+
+class BitLinear(nn.Linear):
+    def __init__(self, in_features, out_features, bias=True):
+        super().__init__(in_features, out_features, bias=bias)
+        self.norm = LlamaRMSNorm(in_features)
+
+    def forward(self, x):
+        w = self.weight
+        x_norm = self.norm(x)
+        x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+        w_quant = w + (weight_quant(w) - w).detach()
+        return F.linear(x_quant, w_quant)
+```
+Also changing as the paper says all F.linear to BitLinear in the attention layers.
 
 ## Notes
 This is absolutely WIP and experimental. Contributions and ideas towards fixing the nan grads are welcome. This also does not include the custom kernels mentioned (but not described) in the paper.
